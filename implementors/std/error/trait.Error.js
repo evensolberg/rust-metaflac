@@ -1,0 +1,4 @@
+(function() {var implementors = {};
+implementors["hex"] = [{"text":"impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/std/error/trait.Error.html\" title=\"trait std::error::Error\">Error</a> for <a class=\"enum\" href=\"hex/enum.FromHexError.html\" title=\"enum hex::FromHexError\">FromHexError</a>","synthetic":false,"types":["hex::error::FromHexError"]}];
+implementors["metaflac"] = [{"text":"impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/std/error/trait.Error.html\" title=\"trait std::error::Error\">Error</a> for <a class=\"struct\" href=\"metaflac/struct.Error.html\" title=\"struct metaflac::Error\">Error</a>","synthetic":false,"types":["metaflac::error::Error"]}];
+if (window.register_implementors) {window.register_implementors(implementors);} else {window.pending_implementors = implementors;}})()
