@@ -8,6 +8,7 @@ pub type Result<T> = ::std::result::Result<T, Error>;
 
 /// Kinds of errors that may occur while performing metadata operations.
 #[derive(Debug)]
+#[allow(clippy::module_name_repetitions)]
 pub enum ErrorKind {
     /// An error kind indicating that an IO error has occurred. Contains the original io::Error.
     Io(io::Error),
@@ -28,8 +29,9 @@ pub struct Error {
 
 impl Error {
     /// Creates a new `Error` using the error kind and description.
-    pub fn new(kind: ErrorKind, description: &'static str) -> Error {
-        Error { kind, description }
+    #[must_use]
+    pub const fn new(kind: ErrorKind, description: &'static str) -> Self {
+        Self { kind, description }
     }
 }
 
@@ -38,19 +40,21 @@ impl error::Error for Error {
         match self.kind {
             ErrorKind::Io(ref err) => Some(err),
             ErrorKind::StringDecoding(ref err) => Some(err),
-            _ => None,
+            ErrorKind::InvalidInput => None,
         }
     }
 
     #[allow(deprecated)]
     fn description(&self) -> &str {
         if self.source().is_some() {
-            self.source().unwrap().description()
+            self.source()
+                .expect("Unable to get lower-level source of error")
+                .description()
         } else {
             match self.kind {
                 ErrorKind::Io(ref err) => error::Error::description(err),
                 ErrorKind::StringDecoding(ref err) => err.description(),
-                _ => self.description,
+                ErrorKind::InvalidInput => self.description,
             }
         }
     }
@@ -61,8 +65,8 @@ impl error::Error for Error {
 }
 
 impl From<io::Error> for Error {
-    fn from(err: io::Error) -> Error {
-        Error {
+    fn from(err: io::Error) -> Self {
+        Self {
             kind: ErrorKind::Io(err),
             description: "",
         }
@@ -70,8 +74,8 @@ impl From<io::Error> for Error {
 }
 
 impl From<string::FromUtf8Error> for Error {
-    fn from(err: string::FromUtf8Error) -> Error {
-        Error {
+    fn from(err: string::FromUtf8Error) -> Self {
+        Self {
             kind: ErrorKind::StringDecoding(err),
             description: "",
         }
@@ -80,10 +84,10 @@ impl From<string::FromUtf8Error> for Error {
 
 impl fmt::Debug for Error {
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        if self.description != "" {
+        if !self.description.is_empty() {
             write!(out, "{:?}: {}", self.kind, self.description)
         } else if let Some(source) = error::Error::source(self) {
-            write!(out, "{}", source)
+            write!(out, "{source}")
         } else {
             write!(out, "{:?}", self.kind)
         }
@@ -92,10 +96,10 @@ impl fmt::Debug for Error {
 
 impl fmt::Display for Error {
     fn fmt(&self, out: &mut fmt::Formatter) -> fmt::Result {
-        if self.description != "" {
+        if !self.description.is_empty() {
             write!(out, "{:?}: {}", self.kind, self.description)
         } else if let Some(source) = error::Error::source(self) {
-            write!(out, "{}", source)
+            write!(out, "{source}")
         } else {
             write!(out, "{:?}", self.kind)
         }

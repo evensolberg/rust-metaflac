@@ -20,8 +20,9 @@ pub struct Tag {
 
 impl<'a> Tag {
     /// Creates a new FLAC tag with no blocks.
-    pub fn new() -> Tag {
-        Tag {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
             path: None,
             blocks: Vec::new(),
             length: 0,
@@ -79,6 +80,7 @@ impl<'a> Tag {
     /// tag.set_vorbis("key", vec!("value"));
     /// assert!(tag.vorbis_comments().is_some());
     /// ```
+    #[must_use]
     pub fn vorbis_comments(&self) -> Option<&VorbisComment> {
         for block in self.blocks() {
             if let Block::VorbisComment(ref comm) = *block {
@@ -141,10 +143,11 @@ impl<'a> Tag {
     ///
     /// assert_eq!(tag.get_vorbis(&key).unwrap().collect::<Vec<_>>(), &[&value1, &value2]);
     /// ```
+    #[must_use]
     pub fn get_vorbis(&'a self, key: &str) -> Option<impl Iterator<Item = &'a str> + 'a> {
         self.vorbis_comments()
             .and_then(|c| c.get(&key.to_ascii_uppercase()))
-            .map(|l| l.iter().map(|s| s.as_ref()))
+            .map(|l| l.iter().map(std::convert::AsRef::as_ref))
     }
 
     /// Sets the values for the specified vorbis comment key.
@@ -309,6 +312,7 @@ impl<'a> Tag {
     /// tag.set_streaminfo(StreamInfo::new());
     /// assert!(tag.get_streaminfo().is_some());
     /// ```
+    #[must_use]
     pub fn get_streaminfo(&self) -> Option<&StreamInfo> {
         for block in self.blocks() {
             if let Block::StreamInfo(ref info) = *block {
@@ -337,6 +341,7 @@ impl<'a> Tag {
 
     /// Attempts to save the tag back to the file which it was read from. An `Error::InvalidInput`
     /// will be returned if this is called on a tag which was not read from a file.
+    #[allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
     pub fn save(&mut self) -> Result<()> {
         if self.path.is_none() {
             return Err(Error::new(
@@ -345,11 +350,12 @@ impl<'a> Tag {
             ));
         }
 
-        let path = self.path.clone().unwrap();
+        let path = self.path.clone().expect("Unable to clone path");
         self.write_to_path(&path)
     }
 
     /// Returns the contents of the reader without any FLAC metadata.
+    #[allow(clippy::similar_names)]
     pub fn skip_metadata<R: Read + Seek>(reader: &mut R) -> Vec<u8> {
         macro_rules! try_io {
             ($reader:ident, $action:expr) => {
@@ -379,8 +385,7 @@ impl<'a> Tag {
                 more = ((header >> 24) & 0x80) == 0;
                 let length = header & 0xFF_FF_FF;
 
-                debug!("Skipping {} bytes", length);
-                try_io!(reader, reader.seek(SeekFrom::Current(length as i64)));
+                try_io!(reader, reader.seek(SeekFrom::Current(i64::from(length))));
             }
         } else {
             try_io!(reader, reader.seek(SeekFrom::Start(0)));
@@ -410,8 +415,9 @@ impl<'a> Tag {
     }
 
     /// Attempts to read a FLAC tag from the reader.
-    pub fn read_from(reader: &mut dyn Read) -> Result<Tag> {
-        let mut tag = Tag::new();
+    #[allow(clippy::missing_errors_doc)]
+    pub fn read_from(reader: &mut dyn Read) -> Result<Self> {
+        let mut tag = Self::new();
 
         for result in Blocks::new(reader) {
             let (length, block) = result?;
@@ -423,6 +429,7 @@ impl<'a> Tag {
     }
 
     /// Attempts to write the FLAC tag to the writer.
+    #[allow(clippy::missing_errors_doc)]
     pub fn write_to(&mut self, writer: &mut dyn Write) -> Result<()> {
         writer.write_all(b"fLaC")?;
 
@@ -439,6 +446,7 @@ impl<'a> Tag {
     /// Attempts to write the FLAC tag to a file at the indicated path. If the specified path is
     /// the same path which the tag was read from, then the tag will be written to the padding if
     /// possible.
+    #[allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
     pub fn write_to_path<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
         self.remove_blocks(BlockType::Padding);
 
@@ -454,17 +462,21 @@ impl<'a> Tag {
 
         // write using padding
         if self.path.is_some()
-            && path.as_ref() == self.path.as_ref().unwrap().as_path()
+            && path.as_ref()
+                == self
+                    .path
+                    .as_ref()
+                    .expect("Unable to get path reference")
+                    .as_path()
             && new_length + 4 <= self.length
         {
-            debug!("Writing using padding");
             let mut file = OpenOptions::new()
                 .write(true)
                 .read(true)
-                .open(self.path.as_ref().unwrap())?;
+                .open(self.path.as_ref().expect("Unable to create file"))?;
             crate::block::read_ident(&mut file)?;
 
-            for bytes in block_bytes.iter() {
+            for bytes in &block_bytes {
                 file.write_all(&bytes[..])?;
             }
 
@@ -473,14 +485,8 @@ impl<'a> Tag {
             self.push_block(padding);
         } else {
             // write by copying file data
-            debug!("Writing to new file");
-
-            let data_opt = {
-                match File::open(&path) {
-                    Ok(mut file) => Some(Tag::skip_metadata(&mut file)),
-                    Err(_) => None,
-                }
-            };
+            let data_opt =
+                File::open(&path).map_or(None, |mut file| Some(Self::skip_metadata(&mut file)));
 
             let mut file = OpenOptions::new()
                 .write(true)
@@ -490,12 +496,11 @@ impl<'a> Tag {
 
             file.write_all(b"fLaC")?;
 
-            for bytes in block_bytes.iter() {
+            for bytes in &block_bytes {
                 file.write_all(&bytes[..])?;
             }
 
             let padding_size = 1024;
-            debug!("Adding {} bytes of padding", padding_size);
             let padding = Block::Padding(padding_size);
             new_length += padding.write_to(true, &mut file)?;
             self.push_block(padding);
@@ -511,10 +516,11 @@ impl<'a> Tag {
     }
 
     /// Attempts to read a FLAC tag from the file at the specified path.
-    pub fn read_from_path<P: AsRef<Path>>(path: P) -> Result<Tag> {
+    #[allow(clippy::missing_errors_doc)]
+    pub fn read_from_path<P: AsRef<Path>>(path: P) -> Result<Self> {
         let file = File::open(&path)?;
         let mut reader = BufReader::new(file);
-        let mut tag = Tag::read_from(&mut reader)?;
+        let mut tag = Self::read_from(&mut reader)?;
         tag.path = Some(path.as_ref().to_path_buf());
         Ok(tag)
     }
@@ -522,7 +528,7 @@ impl<'a> Tag {
 
 impl Default for Tag {
     fn default() -> Self {
-        Tag::new()
+        Self::new()
     }
 }
 

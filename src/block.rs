@@ -7,9 +7,8 @@ use std::convert::TryInto;
 use std::io::{Read, Write};
 use std::iter::repeat;
 
-// BlockType {{{
 /// Types of blocks. Used primarily to map blocks to block identifiers when reading and writing.
-#[allow(missing_docs)]
+#[allow(missing_docs, clippy::module_name_repetitions)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BlockType {
     StreamInfo,
@@ -24,33 +23,34 @@ pub enum BlockType {
 
 #[allow(missing_docs)]
 impl BlockType {
-    fn to_u8(&self) -> u8 {
-        match *self {
-            BlockType::StreamInfo => 0,
-            BlockType::Padding => 1,
-            BlockType::Application => 2,
-            BlockType::SeekTable => 3,
-            BlockType::VorbisComment => 4,
-            BlockType::CueSheet => 5,
-            BlockType::Picture => 6,
-            BlockType::Unknown(n) => n as u8,
+    /// Returns the corresponding block type byte for the block type.
+    const fn to_u8(self) -> u8 {
+        match self {
+            Self::StreamInfo => 0,
+            Self::Padding => 1,
+            Self::Application => 2,
+            Self::SeekTable => 3,
+            Self::VorbisComment => 4,
+            Self::CueSheet => 5,
+            Self::Picture => 6,
+            Self::Unknown(n) => n,
         }
     }
 
-    fn from_u8(n: u8) -> BlockType {
+    /// Returns the corresponding block type for the block type byte.
+    const fn from_u8(n: u8) -> Self {
         match n {
-            0 => BlockType::StreamInfo,
-            1 => BlockType::Padding,
-            2 => BlockType::Application,
-            3 => BlockType::SeekTable,
-            4 => BlockType::VorbisComment,
-            5 => BlockType::CueSheet,
-            6 => BlockType::Picture,
-            n => BlockType::Unknown(n),
+            0 => Self::StreamInfo,
+            1 => Self::Padding,
+            2 => Self::Application,
+            3 => Self::SeekTable,
+            4 => Self::VorbisComment,
+            5 => Self::CueSheet,
+            6 => Self::Picture,
+            n => Self::Unknown(n),
         }
     }
 }
-// }}}
 
 /// The parsed content of a metadata block.
 #[derive(Clone, Debug)]
@@ -76,70 +76,80 @@ pub enum Block {
 impl Block {
     /// Attempts to read a block from the reader. Returns a tuple containing a boolean indicating
     /// if the block was the last block, the length of the block in bytes, and the new `Block`.
-    pub fn read_from(reader: &mut dyn Read) -> Result<(bool, u32, Block)> {
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if unable to read the first byte of the block.
+    /// - Returns an error if unable to read the length of the block.
+    /// - Returns erors if unable to get the comments, picture(s) or cuesheet.
+    ///
+    /// # Panics
+    ///
+    /// Panics if unable to read the block data.
+    ///
+    #[allow(clippy::cast_possible_truncation)]
+    pub fn read_from(reader: &mut dyn Read) -> Result<(bool, u32, Self)> {
         let byte = reader.read_u8()?;
         let is_last = (byte & 0x80) != 0;
         let blocktype_byte = byte & 0x7F;
         let blocktype = BlockType::from_u8(blocktype_byte);
-        let length = reader.read_uint::<BE>(3)? as u32;
-
-        debug!("Reading block {:?} with {} bytes", blocktype, length);
+        let length = reader.read_uint::<BE>(3)? as u32; // Returns an u64, but we know it's 3 bytes so it fits in an u32.
 
         let mut data = Vec::new();
-        reader.take(length as u64).read_to_end(&mut data).unwrap();
+        reader
+            .take(u64::from(length))
+            .read_to_end(&mut data)
+            .expect("Unable to read block data");
 
         let block = match blocktype {
-            BlockType::StreamInfo => Block::StreamInfo(StreamInfo::from_bytes(&data[..])),
-            BlockType::Padding => Block::Padding(length),
-            BlockType::Application => Block::Application(Application::from_bytes(&data[..])),
-            BlockType::SeekTable => Block::SeekTable(SeekTable::from_bytes(&data[..])),
-            BlockType::VorbisComment => Block::VorbisComment(VorbisComment::from_bytes(&data[..])?),
-            BlockType::Picture => Block::Picture(Picture::from_bytes(&data[..])?),
-            BlockType::CueSheet => Block::CueSheet(CueSheet::from_bytes(&data[..])?),
-            BlockType::Unknown(_) => Block::Unknown((blocktype_byte, data)),
+            BlockType::StreamInfo => Self::StreamInfo(StreamInfo::from_bytes(&data[..])),
+            BlockType::Padding => Self::Padding(length),
+            BlockType::Application => Self::Application(Application::from_bytes(&data[..])),
+            BlockType::SeekTable => Self::SeekTable(SeekTable::from_bytes(&data[..])),
+            BlockType::VorbisComment => Self::VorbisComment(VorbisComment::from_bytes(&data[..])?),
+            BlockType::Picture => Self::Picture(Picture::from_bytes(&data[..])?),
+            BlockType::CueSheet => Self::CueSheet(CueSheet::from_bytes(&data[..])?),
+            BlockType::Unknown(_) => Self::Unknown((blocktype_byte, data)),
         };
-
-        debug!("{:?}", block);
 
         Ok((is_last, length + 4, block))
     }
 
     /// Attemps to write the block to the writer. Returns the length of the block in bytes.
+    ///
+    /// # Errors
+    ///
+    /// - Returns an error if unable to write the block data.
+    #[allow(clippy::cast_possible_truncation)]
     pub fn write_to(&self, is_last: bool, writer: &mut dyn Write) -> Result<u32> {
         let (content_len, contents) = match *self {
-            Block::StreamInfo(ref streaminfo) => {
+            Self::StreamInfo(ref streaminfo) => {
                 let bytes = streaminfo.to_bytes();
                 (bytes.len() as u32, Some(bytes))
             }
-            Block::Application(ref application) => {
+            Self::Application(ref application) => {
                 let bytes = application.to_bytes();
                 (bytes.len() as u32, Some(bytes))
             }
-            Block::CueSheet(ref cuesheet) => {
+            Self::CueSheet(ref cuesheet) => {
                 let bytes = cuesheet.to_bytes();
                 (bytes.len() as u32, Some(bytes))
             }
-            Block::Padding(size) => (size, None),
-            Block::Picture(ref picture) => {
+            Self::Padding(size) => (size, None),
+            Self::Picture(ref picture) => {
                 let bytes = picture.to_bytes();
                 (bytes.len() as u32, Some(bytes))
             }
-            Block::SeekTable(ref seektable) => {
+            Self::SeekTable(ref seektable) => {
                 let bytes = seektable.to_bytes();
                 (bytes.len() as u32, Some(bytes))
             }
-            Block::VorbisComment(ref vorbis) => {
+            Self::VorbisComment(ref vorbis) => {
                 let bytes = vorbis.to_bytes();
                 (bytes.len() as u32, Some(bytes))
             }
-            Block::Unknown((_, ref bytes)) => (bytes.len() as u32, Some(bytes.clone())),
+            Self::Unknown((_, ref bytes)) => (bytes.len() as u32, Some(bytes.clone())),
         };
-
-        debug!(
-            "Writing block {:?} with {} bytes",
-            self.block_type(),
-            content_len
-        );
 
         let mut byte: u8 = 0;
         if is_last {
@@ -150,20 +160,18 @@ impl Block {
         writer.write_u8(byte)?;
         writer.write_all(&content_len.to_be_bytes()[1..])?;
 
-        match contents {
-            Some(bytes) => writer.write_all(&bytes[..])?,
-            None => {
-                let zeroes = [0; 1024];
-                let mut remaining = content_len as usize;
-                loop {
-                    if remaining <= zeroes.len() {
-                        writer.write_all(&zeroes[..remaining])?;
-                        break;
-                    } else {
-                        writer.write_all(&zeroes[..])?;
-                        remaining -= zeroes.len();
-                    }
+        if let Some(bytes) = contents {
+            writer.write_all(&bytes[..])?;
+        } else {
+            let zeroes = [0; 1024];
+            let mut remaining = content_len as usize;
+            loop {
+                if remaining <= zeroes.len() {
+                    writer.write_all(&zeroes[..remaining])?;
+                    break;
                 }
+                writer.write_all(&zeroes[..])?;
+                remaining -= zeroes.len();
             }
         }
 
@@ -171,16 +179,17 @@ impl Block {
     }
 
     /// Returns the corresponding block type byte for the block.
-    pub fn block_type(&self) -> BlockType {
+    #[must_use]
+    pub const fn block_type(&self) -> BlockType {
         match *self {
-            Block::StreamInfo(_) => BlockType::StreamInfo,
-            Block::Application(_) => BlockType::Application,
-            Block::CueSheet(_) => BlockType::CueSheet,
-            Block::Padding(_) => BlockType::Padding,
-            Block::Picture(_) => BlockType::Picture,
-            Block::SeekTable(_) => BlockType::SeekTable,
-            Block::VorbisComment(_) => BlockType::VorbisComment,
-            Block::Unknown((blocktype, _)) => BlockType::Unknown(blocktype),
+            Self::StreamInfo(_) => BlockType::StreamInfo,
+            Self::Application(_) => BlockType::Application,
+            Self::CueSheet(_) => BlockType::CueSheet,
+            Self::Padding(_) => BlockType::Padding,
+            Self::Picture(_) => BlockType::Picture,
+            Self::SeekTable(_) => BlockType::SeekTable,
+            Self::VorbisComment(_) => BlockType::VorbisComment,
+            Self::Unknown((blocktype, _)) => BlockType::Unknown(blocktype),
         }
     }
 }
@@ -217,8 +226,9 @@ impl ::std::fmt::Debug for StreamInfo {
 
 impl StreamInfo {
     /// Returns a new `StreamInfo` with zero/empty values.
-    pub fn new() -> StreamInfo {
-        StreamInfo {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
             min_block_size: 0,
             max_block_size: 0,
             min_frame_size: 0,
@@ -231,38 +241,58 @@ impl StreamInfo {
         }
     }
 
-    /// Parses the bytes as a StreamInfo block.
-    pub fn from_bytes(bytes: &[u8]) -> StreamInfo {
-        let mut streaminfo = StreamInfo::new();
+    /// Parses the bytes as a `StreamInfo` block.
+    #[must_use]
+    #[allow(clippy::missing_panics_doc, clippy::cast_possible_truncation)]
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut streaminfo = Self::new();
         let mut i = 0;
 
-        streaminfo.min_block_size =
-            u16::from_be_bytes((&bytes[i..i + 2]).try_into().unwrap()) as u16;
+        streaminfo.min_block_size = u16::from_be_bytes(
+            (&bytes[i..i + 2])
+                .try_into()
+                .expect("Unable to convert min_block_size to u16"),
+        );
         i += 2;
 
-        streaminfo.max_block_size =
-            u16::from_be_bytes((&bytes[i..i + 2]).try_into().unwrap()) as u16;
+        streaminfo.max_block_size = u16::from_be_bytes(
+            (&bytes[i..i + 2])
+                .try_into()
+                .expect("Unable to convert max_block_size to u16"),
+        );
         i += 2;
 
-        streaminfo.min_frame_size = (&bytes[i..i + 3]).read_uint::<BE>(3).unwrap() as u32;
+        streaminfo.min_frame_size = (&bytes[i..i + 3])
+            .read_uint::<BE>(3)
+            .expect("Unable to convert min_frame_size to u32")
+            as u32;
         i += 3;
 
-        streaminfo.max_frame_size = (&bytes[i..i + 3]).read_uint::<BE>(3).unwrap() as u32;
+        streaminfo.max_frame_size = (&bytes[i..i + 3])
+            .read_uint::<BE>(3)
+            .expect("Unable to convert max_frame_size to u32")
+            as u32;
         i += 3;
 
         // first 16 bits of sample rate
-        let sample_first = u16::from_be_bytes((&bytes[i..i + 2]).try_into().unwrap()) as u16;
+        let sample_first = u16::from_be_bytes(
+            (&bytes[i..i + 2])
+                .try_into()
+                .expect("Unable to convert sample_first to u16"),
+        );
         i += 2;
 
         // last 4 bits of sample rate, 3 bits of channel, first bit of bits/sample
         let sample_channel_bps = bytes[i];
         i += 1;
 
-        streaminfo.sample_rate = (sample_first as u32) << 4 | (sample_channel_bps as u32) >> 4;
+        streaminfo.sample_rate = u32::from(sample_first) << 4 | u32::from(sample_channel_bps) >> 4;
         streaminfo.num_channels = ((sample_channel_bps >> 1) & 0x7) + 1;
 
         // last 4 bits of bits/sample, 36 bits of total samples
-        let bps_total = (&bytes[i..i + 5]).read_uint::<BE>(5).unwrap();
+        let bps_total = (&bytes[i..i + 5])
+            .read_uint::<BE>(5)
+            .expect("Unable to read bps_total");
         i += 5;
 
         streaminfo.bits_per_sample =
@@ -275,6 +305,8 @@ impl StreamInfo {
     }
 
     /// Returns a vector representation of the streaminfo block suitable for writing to a file.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
@@ -288,13 +320,13 @@ impl StreamInfo {
 
         // last 4 bits of sample rate, 3 bits of channel, first bit of bits/sample
         let byte = ((self.sample_rate & 0xF) << 4) as u8
-            | (((self.num_channels - 1) & 0x7) << 1) as u8
-            | (((self.bits_per_sample - 1) >> 4) & 0x1) as u8;
+            | (((self.num_channels - 1) & 0x7) << 1)
+            | (((self.bits_per_sample - 1) >> 4) & 0x1);
         bytes.push(byte);
 
         // last 4 bits of bits/sample, first 4 bits of sample count
-        let byte = (((self.bits_per_sample - 1) & 0xF) << 4) as u8
-            | ((self.total_samples >> 32) & 0xF) as u8;
+        let byte =
+            (((self.bits_per_sample - 1) & 0xF) << 4) | ((self.total_samples >> 32) & 0xF) as u8;
         bytes.push(byte);
 
         // last 32 bits of sample count
@@ -304,7 +336,7 @@ impl StreamInfo {
                 .iter(),
         );
 
-        bytes.extend(self.md5.iter().cloned());
+        bytes.extend(self.md5.iter().copied());
 
         bytes
     }
@@ -340,16 +372,18 @@ impl ::std::fmt::Debug for Application {
 
 impl Application {
     /// Returns a new `Application` with a zero id and no data.
-    pub fn new() -> Application {
-        Application {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
             id: Vec::new(),
             data: Vec::new(),
         }
     }
 
     /// Parses the bytes as an application block.
-    pub fn from_bytes(bytes: &[u8]) -> Application {
-        let mut application = Application::new();
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut application = Self::new();
         let mut i = 0;
 
         application.id = bytes[i..i + 4].to_vec();
@@ -361,11 +395,12 @@ impl Application {
     }
 
     /// Returns a vector representation of the application block suitable for writing to a file.
+    #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
-        bytes.extend(self.id.iter().cloned());
-        bytes.extend(self.data.iter().cloned());
+        bytes.extend(self.id.iter().copied());
+        bytes.extend(self.data.iter().copied());
 
         bytes
     }
@@ -390,8 +425,9 @@ pub struct CueSheetTrackIndex {
 
 impl CueSheetTrackIndex {
     /// Returns a new `CueSheetTrackIndex` with all zero values.
-    pub fn new() -> CueSheetTrackIndex {
-        CueSheetTrackIndex {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
             offset: 0,
             point_num: 0,
         }
@@ -412,7 +448,7 @@ pub struct CueSheetTrack {
     pub offset: u64,
     /// Track number.
     pub number: u8,
-    /// Track ISRC. This is a 12-digit alphanumeric code.  
+    /// Track ISRC. This is a 12-digit alphanumeric code.
     pub isrc: String,
     /// The track type.
     pub is_audio: bool,
@@ -425,8 +461,9 @@ pub struct CueSheetTrack {
 impl CueSheetTrack {
     /// Returns a new `CueSheetTrack` of type audio, without pre-emphasis, and with zero/empty
     /// values.
-    pub fn new() -> CueSheetTrack {
-        CueSheetTrack {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
             offset: 0,
             number: 0,
             isrc: String::new(),
@@ -458,8 +495,9 @@ pub struct CueSheet {
 
 impl CueSheet {
     /// Returns a new `CueSheet` for a CD with zero/empty values.
-    pub fn new() -> CueSheet {
-        CueSheet {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
             catalog_num: String::new(),
             num_leadin: 0,
             is_cd: true,
@@ -468,14 +506,19 @@ impl CueSheet {
     }
 
     /// Parses the bytes as a cuesheet block.
-    pub fn from_bytes(bytes: &[u8]) -> Result<CueSheet> {
-        let mut cuesheet = CueSheet::new();
+    #[allow(clippy::missing_errors_doc, clippy::missing_panics_doc)]
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let mut cuesheet = Self::new();
         let mut i = 0;
 
         cuesheet.catalog_num = String::from_utf8(bytes[i..i + 128].to_vec())?;
         i += 128;
 
-        cuesheet.num_leadin = u64::from_be_bytes((&bytes[i..i + 8]).try_into().unwrap());
+        cuesheet.num_leadin = u64::from_be_bytes(
+            (&bytes[i..i + 8])
+                .try_into()
+                .expect("Unable to read num_leadin"),
+        );
         i += 8;
 
         let flags = bytes[i];
@@ -491,7 +534,11 @@ impl CueSheet {
         for _ in 0..num_tracks {
             let mut track = CueSheetTrack::new();
 
-            track.offset = u64::from_be_bytes((&bytes[i..i + 8]).try_into().unwrap());
+            track.offset = u64::from_be_bytes(
+                (&bytes[i..i + 8])
+                    .try_into()
+                    .expect("Unable to read track offset"),
+            );
             i += 8;
 
             track.number = bytes[i];
@@ -504,7 +551,6 @@ impl CueSheet {
             i += 1;
 
             track.is_audio = (flags & 0x80) == 0;
-
             track.pre_emphasis = (flags & 0x40) != 0;
 
             i += 13;
@@ -515,7 +561,11 @@ impl CueSheet {
             for _ in 0..num_indices {
                 let mut index = CueSheetTrackIndex::new();
 
-                index.offset = u64::from_be_bytes((&bytes[i..i + 8]).try_into().unwrap());
+                index.offset = u64::from_be_bytes(
+                    (&bytes[i..i + 8])
+                        .try_into()
+                        .expect("Unable to read index offset"),
+                );
                 i += 8;
 
                 index.point_num = bytes[i];
@@ -533,18 +583,15 @@ impl CueSheet {
     }
 
     /// Returns a vector representation of the cuesheet block suitable for writing to a file.
+    #[must_use]
+    #[allow(clippy::missing_panics_doc, clippy::cast_possible_truncation)]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         assert!(self.catalog_num.len() <= 128);
 
-        bytes.extend(self.catalog_num.clone().into_bytes().into_iter());
-        bytes.extend(
-            repeat(0)
-                .take(128 - self.catalog_num.len())
-                .collect::<Vec<u8>>()
-                .into_iter(),
-        );
+        bytes.extend(self.catalog_num.clone().into_bytes());
+        bytes.extend(repeat(0).take(128 - self.catalog_num.len()));
         bytes.extend(self.num_leadin.to_be_bytes().iter());
 
         let mut flags = 0;
@@ -553,11 +600,11 @@ impl CueSheet {
         }
         bytes.push(flags);
 
-        bytes.extend([0; 258].iter().cloned());
+        bytes.extend([0; 258].iter().copied());
 
         bytes.push(self.tracks.len() as u8);
 
-        for track in self.tracks.iter() {
+        for track in &self.tracks {
             assert!(track.isrc.len() <= 12);
 
             bytes.extend(track.offset.to_be_bytes().iter());
@@ -579,14 +626,14 @@ impl CueSheet {
             }
             bytes.push(flags);
 
-            bytes.extend([0; 13].iter().cloned());
+            bytes.extend([0; 13].iter().copied());
 
             bytes.push(track.indices.len() as u8);
 
-            for index in track.indices.iter() {
+            for index in &track.indices {
                 bytes.extend(index.offset.to_be_bytes().iter());
                 bytes.push(index.point_num);
-                bytes.extend([0; 3].iter().cloned());
+                bytes.extend([0; 3].iter().copied());
             }
         }
 
@@ -630,29 +677,29 @@ pub enum PictureType {
 }
 
 impl PictureType {
-    fn from_u32(n: u32) -> Option<PictureType> {
+    const fn from_u32(n: u32) -> Option<Self> {
         match n {
-            0 => Some(PictureType::Other),
-            1 => Some(PictureType::Icon),
-            2 => Some(PictureType::OtherIcon),
-            3 => Some(PictureType::CoverFront),
-            4 => Some(PictureType::CoverBack),
-            5 => Some(PictureType::Leaflet),
-            6 => Some(PictureType::Media),
-            7 => Some(PictureType::LeadArtist),
-            8 => Some(PictureType::Artist),
-            9 => Some(PictureType::Conductor),
-            10 => Some(PictureType::Band),
-            11 => Some(PictureType::Composer),
-            12 => Some(PictureType::Lyricist),
-            13 => Some(PictureType::RecordingLocation),
-            14 => Some(PictureType::DuringRecording),
-            15 => Some(PictureType::DuringPerformance),
-            16 => Some(PictureType::ScreenCapture),
-            17 => Some(PictureType::BrightFish),
-            18 => Some(PictureType::Illustration),
-            19 => Some(PictureType::BandLogo),
-            20 => Some(PictureType::PublisherLogo),
+            0 => Some(Self::Other),
+            1 => Some(Self::Icon),
+            2 => Some(Self::OtherIcon),
+            3 => Some(Self::CoverFront),
+            4 => Some(Self::CoverBack),
+            5 => Some(Self::Leaflet),
+            6 => Some(Self::Media),
+            7 => Some(Self::LeadArtist),
+            8 => Some(Self::Artist),
+            9 => Some(Self::Conductor),
+            10 => Some(Self::Band),
+            11 => Some(Self::Composer),
+            12 => Some(Self::Lyricist),
+            13 => Some(Self::RecordingLocation),
+            14 => Some(Self::DuringRecording),
+            15 => Some(Self::DuringPerformance),
+            16 => Some(Self::ScreenCapture),
+            17 => Some(Self::BrightFish),
+            18 => Some(Self::Illustration),
+            19 => Some(Self::BandLogo),
+            20 => Some(Self::PublisherLogo),
             _ => None,
         }
     }
@@ -688,8 +735,9 @@ impl ::std::fmt::Debug for Picture {
 
 impl Picture {
     /// Returns a new `Picture` with zero/empty values.
-    pub fn new() -> Picture {
-        Picture {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
             picture_type: PictureType::Other,
             mime_type: String::new(),
             description: String::new(),
@@ -702,46 +750,76 @@ impl Picture {
     }
 
     /// Attempts to parse the bytes as a `Picture` block. Returns a `Picture` on success.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Picture> {
-        let mut picture = Picture::new();
+    #[allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let mut picture = Self::new();
         let mut i = 0;
 
-        let picture_type_u32 = u32::from_be_bytes((&bytes[i..i + 4]).try_into().unwrap());
-        picture.picture_type = match PictureType::from_u32(picture_type_u32) {
-            Some(picture_type) => picture_type,
-            None => {
-                debug!("Encountered invalid picture type: {}", picture_type_u32);
-                return Err(Error::new(ErrorKind::InvalidInput, "invalid picture type"));
-            }
+        let picture_type_u32 = u32::from_be_bytes(
+            (&bytes[i..i + 4])
+                .try_into()
+                .expect("Unable to convert picture_type to u32"),
+        );
+        picture.picture_type = if let Some(picture_type) = PictureType::from_u32(picture_type_u32) {
+            picture_type
+        } else {
+            return Err(Error::new(ErrorKind::InvalidInput, "invalid picture type"));
         };
         i += 4;
 
-        let mime_length = u32::from_be_bytes((&bytes[i..i + 4]).try_into().unwrap()) as usize;
+        let mime_length = u32::from_be_bytes(
+            (&bytes[i..i + 4])
+                .try_into()
+                .expect("Unable to convert mime_length to u32"),
+        ) as usize;
         i += 4;
 
         picture.mime_type = String::from_utf8(bytes[i..i + mime_length].to_vec())?;
         i += mime_length;
 
-        let description_length =
-            u32::from_be_bytes((&bytes[i..i + 4]).try_into().unwrap()) as usize;
+        let description_length = u32::from_be_bytes(
+            (&bytes[i..i + 4])
+                .try_into()
+                .expect("Unable to convert description_length to u32"),
+        ) as usize;
         i += 4;
 
         picture.description = String::from_utf8(bytes[i..i + description_length].to_vec())?;
         i += description_length;
 
-        picture.width = u32::from_be_bytes((&bytes[i..i + 4]).try_into().unwrap());
+        picture.width = u32::from_be_bytes(
+            (&bytes[i..i + 4])
+                .try_into()
+                .expect("Unable to convert width to u32"),
+        );
         i += 4;
 
-        picture.height = u32::from_be_bytes((&bytes[i..i + 4]).try_into().unwrap());
+        picture.height = u32::from_be_bytes(
+            (&bytes[i..i + 4])
+                .try_into()
+                .expect("Unable to convert height to u32"),
+        );
         i += 4;
 
-        picture.depth = u32::from_be_bytes((&bytes[i..i + 4]).try_into().unwrap());
+        picture.depth = u32::from_be_bytes(
+            (&bytes[i..i + 4])
+                .try_into()
+                .expect("Unable to convert depth to u32"),
+        );
         i += 4;
 
-        picture.num_colors = u32::from_be_bytes((&bytes[i..i + 4]).try_into().unwrap());
+        picture.num_colors = u32::from_be_bytes(
+            (&bytes[i..i + 4])
+                .try_into()
+                .expect("Unable to convert num_colors to u32"),
+        );
         i += 4;
 
-        let data_length = u32::from_be_bytes((&bytes[i..i + 4]).try_into().unwrap()) as usize;
+        let data_length = u32::from_be_bytes(
+            (&bytes[i..i + 4])
+                .try_into()
+                .expect("Unable to convert data_length to u32"),
+        ) as usize;
         i += 4;
 
         picture.data = bytes[i..i + data_length].to_vec();
@@ -750,6 +828,8 @@ impl Picture {
     }
 
     /// Returns a vector representation of the picture block suitable for writing to a file.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
@@ -757,11 +837,11 @@ impl Picture {
 
         let mime_type = self.mime_type.clone().into_bytes();
         bytes.extend((mime_type.len() as u32).to_be_bytes().iter());
-        bytes.extend(mime_type.into_iter());
+        bytes.extend(mime_type);
 
         let description = self.description.clone().into_bytes();
         bytes.extend((description.len() as u32).to_be_bytes().iter());
-        bytes.extend(description.into_iter());
+        bytes.extend(description);
 
         bytes.extend(self.width.to_be_bytes().iter());
         bytes.extend(self.height.to_be_bytes().iter());
@@ -770,7 +850,7 @@ impl Picture {
 
         let data = self.data.clone();
         bytes.extend((data.len() as u32).to_be_bytes().iter());
-        bytes.extend(data.into_iter());
+        bytes.extend(data);
 
         bytes
     }
@@ -800,8 +880,9 @@ pub struct SeekPoint {
 
 impl SeekPoint {
     /// Returns a new `SeekPoint` with all zero values.
-    pub fn new() -> SeekPoint {
-        SeekPoint {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
             sample_number: 0,
             offset: 0,
             num_samples: 0,
@@ -809,22 +890,33 @@ impl SeekPoint {
     }
 
     /// Parses the bytes as a seekpoint.
-    pub fn from_bytes(bytes: &[u8]) -> SeekPoint {
-        let mut seekpoint = SeekPoint::new();
+    #[must_use]
+    #[allow(clippy::missing_panics_doc)]
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut seekpoint = Self::new();
         let mut i = 0;
 
-        seekpoint.sample_number = u64::from_be_bytes((&bytes[i..i + 8]).try_into().unwrap());
+        seekpoint.sample_number = u64::from_be_bytes(
+            (&bytes[i..i + 8])
+                .try_into()
+                .expect("Unable to convert sample_number to u64"),
+        );
         i += 8;
 
-        seekpoint.offset = u64::from_be_bytes((&bytes[i..i + 8]).try_into().unwrap());
+        seekpoint.offset = u64::from_be_bytes(
+            (&bytes[i..i + 8])
+                .try_into()
+                .expect("Unable to convert offset to u64"),
+        );
         i += 8;
 
-        seekpoint.num_samples = u16::from_be_bytes((&bytes[i..i + 2]).try_into().unwrap());
+        seekpoint.num_samples = u16::from_be_bytes((&bytes[i..i + 2]).try_into().expect(""));
 
         seekpoint
     }
 
     /// Returns a vector representation of the seekpoint suitable for writing to a file.
+    #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
@@ -852,15 +944,17 @@ pub struct SeekTable {
 
 impl SeekTable {
     /// Returns a new `SeekTable` with no seekpoints.
-    pub fn new() -> SeekTable {
-        SeekTable {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
             seekpoints: Vec::new(),
         }
     }
 
     /// Parses the bytes as a seektable.
-    pub fn from_bytes(bytes: &[u8]) -> SeekTable {
-        let mut seektable = SeekTable::new();
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        let mut seektable = Self::new();
         let num_points = bytes.len() / 18;
 
         let mut i = 0;
@@ -874,10 +968,11 @@ impl SeekTable {
     }
 
     /// Returns a vector representation of the seektable suitable for writing to a file.
+    #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
-        for seekpoint in self.seekpoints.iter() {
+        for seekpoint in &self.seekpoints {
             bytes.extend(seekpoint.to_bytes().into_iter());
         }
 
@@ -893,7 +988,7 @@ impl Default for SeekTable {
 //}}}
 
 // VorbisComment {{{
-/// A structure representing a VORBIS_COMMENT block.
+/// A structure representing a `VORBIS_COMMENT` block.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct VorbisComment {
     /// The vendor string.
@@ -904,8 +999,9 @@ pub struct VorbisComment {
 
 impl VorbisComment {
     /// Returns a new `VorbisComment` with an empty vendor string and no comments.
-    pub fn new() -> VorbisComment {
-        VorbisComment {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
             vendor_string: String::new(),
             comments: HashMap::new(),
         }
@@ -913,22 +1009,34 @@ impl VorbisComment {
 
     /// Attempts to parse the bytes as a vorbis comment block. Returns a `VorbisComment` on
     /// success.
-    pub fn from_bytes(bytes: &[u8]) -> Result<VorbisComment> {
-        let mut vorbis = VorbisComment::new();
+    #[allow(clippy::missing_panics_doc, clippy::missing_errors_doc)]
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let mut vorbis = Self::new();
         let mut i = 0;
 
-        let vendor_length = u32::from_le_bytes((&bytes[i..i + 4]).try_into().unwrap()) as usize;
+        let vendor_length = u32::from_le_bytes(
+            (&bytes[i..i + 4])
+                .try_into()
+                .expect("Unable to convert vendor_length to u32"),
+        ) as usize;
         i += 4;
 
         vorbis.vendor_string = String::from_utf8(bytes[i..i + vendor_length].to_vec())?;
         i += vendor_length;
 
-        let num_comments = u32::from_le_bytes((&bytes[i..i + 4]).try_into().unwrap());
+        let num_comments = u32::from_le_bytes(
+            (&bytes[i..i + 4])
+                .try_into()
+                .expect("Unable to convert num_comments to u32"),
+        ) as usize;
         i += 4;
 
         for _ in 0..num_comments {
-            let comment_length =
-                u32::from_le_bytes((&bytes[i..i + 4]).try_into().unwrap()) as usize;
+            let comment_length = u32::from_le_bytes(
+                (&bytes[i..i + 4])
+                    .try_into()
+                    .expect("Unable to convert comment_length to u32"),
+            ) as usize;
             i += 4;
 
             let comments = String::from_utf8(bytes[i..i + comment_length].to_vec())?;
@@ -949,13 +1057,15 @@ impl VorbisComment {
     }
 
     /// Returns a vector representation of the vorbis comment suitable for writing to a file.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
 
         let vendor_string = self.vendor_string.clone().into_bytes();
 
         bytes.extend((vendor_string.len() as u32).to_le_bytes().iter());
-        bytes.extend(vendor_string.into_iter());
+        bytes.extend(vendor_string);
 
         bytes.extend(
             (self
@@ -966,10 +1076,9 @@ impl VorbisComment {
             .iter(),
         );
 
-        for (key, list) in self.comments.iter() {
-            for value in list.iter() {
-                let comment_string = format!("{}={}", key, value);
-                debug!("Writing comment: {}", comment_string);
+        for (key, list) in &self.comments {
+            for value in list {
+                let comment_string = format!("{key}={value}");
                 let comment = comment_string.into_bytes();
                 bytes.extend((comment.len() as u32).to_le_bytes().iter());
                 bytes.extend(comment.into_iter());
@@ -980,6 +1089,7 @@ impl VorbisComment {
     }
 
     /// Returns a reference to the vector of comments for the specified key.
+    #[must_use]
     pub fn get(&self, key: &str) -> Option<&Vec<String>> {
         self.comments.get(key)
     }
@@ -988,8 +1098,10 @@ impl VorbisComment {
     pub fn set<K: Into<String>, V: Into<String>>(&mut self, key: K, values: Vec<V>) {
         let key_owned = key.into();
         self.remove(&key_owned[..]);
-        self.comments
-            .insert(key_owned, values.into_iter().map(|s| s.into()).collect());
+        self.comments.insert(
+            key_owned,
+            values.into_iter().map(std::convert::Into::into).collect(),
+        );
     }
 
     /// Removes the comments for the specified key.
@@ -1008,12 +1120,13 @@ impl VorbisComment {
             num_values = values.len();
         }
         if num_values == 0 {
-            self.remove(key)
+            self.remove(key);
         }
     }
 
     // Getters/Setters {{{
     /// Returns a reference to the vector of values with the ARTIST key.
+    #[must_use]
     pub fn artist(&self) -> Option<&Vec<String>> {
         self.get("ARTIST")
     }
@@ -1033,6 +1146,7 @@ impl VorbisComment {
     }
 
     /// Returns a reference to the vector of values with the ALBUM key.
+    #[must_use]
     pub fn album(&self) -> Option<&Vec<String>> {
         self.get("ALBUM")
     }
@@ -1052,6 +1166,7 @@ impl VorbisComment {
     }
 
     /// Returns a reference to the vector of values with the GENRE key.
+    #[must_use]
     pub fn genre(&self) -> Option<&Vec<String>> {
         self.get("GENRE")
     }
@@ -1067,6 +1182,7 @@ impl VorbisComment {
     }
 
     /// Returns reference to the vector of values with the TITLE key.
+    #[must_use]
     pub fn title(&self) -> Option<&Vec<String>> {
         self.get("TITLE")
     }
@@ -1086,19 +1202,20 @@ impl VorbisComment {
     }
 
     /// Attempts to convert the first TRACKNUMBER comment to a `u32`.
+    #[must_use]
     pub fn track(&self) -> Option<u32> {
         self.get("TRACKNUMBER").and_then(|s| {
-            if !s.is_empty() {
-                s[0].parse::<u32>().ok()
-            } else {
+            if s.is_empty() {
                 None
+            } else {
+                s[0].parse::<u32>().ok()
             }
         })
     }
 
     /// Sets the TRACKNUMBER comment.
     pub fn set_track(&mut self, track: u32) {
-        self.set("TRACKNUMBER", vec![format!("{}", track)]);
+        self.set("TRACKNUMBER", vec![format!("{track}")]);
     }
 
     /// Removes all values with the TRACKNUMBER key.
@@ -1107,19 +1224,20 @@ impl VorbisComment {
     }
 
     /// Attempts to convert the first TOTALTRACKS comment to a `u32`.
+    #[must_use]
     pub fn total_tracks(&self) -> Option<u32> {
         self.get("TOTALTRACKS").and_then(|s| {
-            if !s.is_empty() {
-                s[0].parse::<u32>().ok()
-            } else {
+            if s.is_empty() {
                 None
+            } else {
+                s[0].parse::<u32>().ok()
             }
         })
     }
 
     /// Sets the TOTALTRACKS comment.
     pub fn set_total_tracks(&mut self, total_tracks: u32) {
-        self.set("TOTALTRACKS", vec![format!("{}", total_tracks)]);
+        self.set("TOTALTRACKS", vec![format!("{total_tracks}")]);
     }
 
     /// Removes all values with the TOTALTRACKS key.
@@ -1128,6 +1246,7 @@ impl VorbisComment {
     }
 
     /// Returns a reference to the vector of values with the ALBUMARTIST key.
+    #[must_use]
     pub fn album_artist(&self) -> Option<&Vec<String>> {
         self.get("ALBUMARTIST")
     }
@@ -1147,6 +1266,7 @@ impl VorbisComment {
     }
 
     /// Returns a reference to the vector of values with the LYRICS key.
+    #[must_use]
     pub fn lyrics(&self) -> Option<&Vec<String>> {
         self.get("LYRICS")
     }
@@ -1182,8 +1302,8 @@ where
     R: Read,
 {
     /// Create new iterator over FLAC stream's blocks
-    pub fn new(reader: R) -> Self {
-        Blocks {
+    pub const fn new(reader: R) -> Self {
+        Self {
             ident_read: false,
             finished: false,
             reader,
@@ -1207,7 +1327,9 @@ where
             }
         }
 
-        if !self.finished {
+        if self.finished {
+            None
+        } else {
             match Block::read_from(&mut self.reader) {
                 Ok((is_last, length, block)) => {
                     self.finished = is_last;
@@ -1218,8 +1340,6 @@ where
                     Some(Err(err))
                 }
             }
-        } else {
-            None
         }
     }
 }
@@ -1233,7 +1353,7 @@ pub(crate) fn read_ident<R: Read>(mut reader: R) -> Result<()> {
     reader.read_exact(&mut ident)?;
 
     // skip id3 v2.2, v2.3 and v2.4
-    if &ident[0..3] == b"ID3" && vec![0x02, 0x03, 0x04].contains(&ident[3]) {
+    if &ident[0..3] == b"ID3" && [0x02, 0x03, 0x04].contains(&ident[3]) {
         let mut header_tail = [0; 6];
         reader.read_exact(&mut header_tail)?;
         // Header layout from the id3v2 tag spec:
@@ -1242,15 +1362,18 @@ pub(crate) fn read_ident<R: Read>(mut reader: R) -> Result<()> {
         // 1 Byte: Flags, bit 0x10 indicates a 10-Byte footer
         // 4 Bytes: size of the Tag, excluding header and footer, taking 7 bits per byte.
         let has_footer = header_tail[1] & 0x10 > 0;
-        let size = (header_tail[2] as u32 & 0b_0111_1111) << 21
-            | (header_tail[3] as u32 & 0b_0111_1111) << 14
-            | (header_tail[4] as u32 & 0b_0111_1111) << 7
-            | (header_tail[5] as u32 & 0b_0111_1111);
+        let size = (u32::from(header_tail[2]) & 0b_0111_1111) << 21
+            | (u32::from(header_tail[3]) & 0b_0111_1111) << 14
+            | (u32::from(header_tail[4]) & 0b_0111_1111) << 7
+            | (u32::from(header_tail[5]) & 0b_0111_1111);
         // Discard `size` bytes without allocating. See https://stackoverflow.com/questions/42243355/how-to-advance-through-data-from-the-stdioread-trait-when-seek-isnt-impleme
         if has_footer {
-            io::copy(&mut (&mut reader).take(size as u64 + 10), &mut io::sink())?;
+            io::copy(
+                &mut (&mut reader).take(u64::from(size) + 10),
+                &mut io::sink(),
+            )?;
         } else {
-            io::copy(&mut (&mut reader).take(size as u64), &mut io::sink())?;
+            io::copy(&mut (&mut reader).take(u64::from(size)), &mut io::sink())?;
         }
 
         //try to read fLaC again.
